@@ -90,7 +90,7 @@ class HiddenMarkovModel:
             ["state"], {state: solution[symbol] for state, symbol in distro.items()}
         )
 
-    def filtering(self, observed_sequence):
+    def forward(self, observed_sequence):
         """
         Perform the Forward algorithm to compute the probability of the observation sequence.
 
@@ -113,6 +113,35 @@ class HiddenMarkovModel:
             )
         return forward_message
 
+    def backward(self, observed_sequence):
+        """
+        Perform the Backward algorithm to compute the probability of the observation sequence.
+
+        Args:
+            observed_sequence: List of observed symbols.
+
+        Returns:
+            The probability of the observed sequence.
+        """
+        # Initialize backward message as a factor with all ones, representing the end of the sequence
+        backward_message = Factor(["state"], {(s,): 1.0 for s in self.states})
+
+        # Loop backwards through each observation (starting from the second-to-last)
+        for obs in reversed(observed_sequence[1:]):
+            # Multiply backward message by emission probabilities (restricted to current observation)
+            backward_message = (
+                backward_message.multiply(
+                    self.emission_probs.restrict("observation", obs)
+                )
+                .rename_variable("state", "current_state")
+                .multiply(self.transition_probs)
+                .sum_out("current_state")
+                .rename_variable("prev_state", "state")
+                .normalize()
+            )
+
+        return backward_message
+
     def predict(self, observed_seq, target_idx):
         """
         Predict the probability of the target state at a given time step.
@@ -124,7 +153,7 @@ class HiddenMarkovModel:
         Returns:
             The probability of the target state at the given time step.
         """
-        forward_message = self.filtering(observed_seq)
+        forward_message = self.forward(observed_seq)
         # Iterate over the part that is not observed
         for t in range(len(observed_seq), target_idx):
             forward_message = (
@@ -136,36 +165,13 @@ class HiddenMarkovModel:
             )
         return forward_message
 
-    def backward(self, observed_sequence):
+    def smoothing(self, observed_seq, target_idx):
         """
-        Perform the Backward algorithm to compute the probability of the observation sequence.
-
-        Args:
-            observed_sequence: List of observed symbols.
-
-        Returns:
-            The probability of the observed sequence.
+        Compute the probability of the target state given all observations.
         """
-        # Initialize backward messages to all ones (since we're looking at the end of the sequence)
-        backward_message = Factor(["state"], {(s,): 1.0 for s in self.states})
-
-        for t in reversed(range(len(observed_sequence) - 1)):
-            # Update with the observation evidence
-            evidence_factor = self.emission_probs[observed_sequence[t + 1]]
-            backward_message = backward_message.multiply(evidence_factor)
-
-            # Predict: Multiply by transition probabilities and sum out next state
-            backward_message = self.transition_probs.multiply(backward_message)
-            backward_message = backward_message.sum_out("next_state")
-
-        # Multiply with start probabilities and first observation evidence
-        initial_evidence = self.emission_probs[observed_sequence[0]]
-        start_prob = self.start_probs.multiply(initial_evidence)
-        backward_message = backward_message.multiply(start_prob)
-
-        # Sum out the initial states to get the probability of the entire sequence
-        sequence_prob = sum(backward_message.table.values())
-        return sequence_prob
+        forward_message = self.forward(observed_seq[:target_idx])
+        backward_message = self.backward(observed_seq[target_idx:])
+        return forward_message.multiply(backward_message).normalize()
 
     def viterbi(self, observed_sequence):
         """
