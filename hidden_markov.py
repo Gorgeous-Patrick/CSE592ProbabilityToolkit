@@ -1,4 +1,5 @@
 from factor import Factor
+from sympy import symbols, solve, Eq
 
 
 class HiddenMarkovModel:
@@ -20,6 +21,35 @@ class HiddenMarkovModel:
         self.start_probs = start_probs
         self.transition_probs = transition_probs
         self.emission_probs = emission_probs
+
+    def stationary_distribution(self):
+        """
+        Compute the stationary distribution of the Markov chain.
+
+        Returns:
+            The stationary distribution as a Factor over states.
+        """
+        # Initialize the stationary distribution as the start probabilities
+        symbols_list = [symbols(f"state_{i}") for i in range(len(self.states))]
+        # Create a dict that maps states to symbols
+        distro = {state: symbol for state, symbol in zip(self.states, symbols_list)}
+        # Create a factor with the stationary distribution
+        distro_factor = Factor(["prev_state"], distro)
+        new_distro_factor = (
+            self.transition_probs.multiply(distro_factor)
+            .sum_out("prev_state")
+            .rename_variable("current_state", "state")
+        )
+        # Construct the equations for the stationary distribution
+        equations = [Eq(sum(symbols_list), 1)]
+        for state in self.states:
+            equation = Eq(distro[state], new_distro_factor.table[state])
+            equations.append(equation)
+        solution = solve(equations, symbols_list)
+        # Construct the factor stationary distribution from the solution
+        return Factor(
+            ["state"], {state: solution[symbol] for state, symbol in distro.items()}
+        )
 
     def forward(self, observed_sequence):
         """

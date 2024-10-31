@@ -186,6 +186,22 @@ class Factor:
 
         return Factor(self.variables, normalized_table)
 
+    def rename_variable(self, old_name, new_name):
+        """
+        Rename a variable in the factor.
+
+        Args:
+            old_name: The old variable name.
+            new_name: The new variable name.
+
+        Returns:
+            A new factor with the variable renamed.
+        """
+        if old_name not in self.variables:
+            return self
+        self.variables[self.variables.index(old_name)] = new_name
+        return self
+
 
 if __name__ == "__main__":
     # Example usage
