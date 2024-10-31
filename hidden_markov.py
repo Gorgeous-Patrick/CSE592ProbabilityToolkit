@@ -2,6 +2,45 @@ from factor import Factor
 from sympy import symbols, solve, Eq
 
 
+class MarkovFactor(Factor):
+    """A Markov Factor is a Factor whose variable is called 'state'."""
+
+    def __init__(self, table):
+        """
+        Initialize the Markov Factor.
+
+        Args:
+            table: Dictionary where keys are states (e.g., 0), and values are the corresponding probabilities.
+        """
+        super().__init__(["state"], table)
+
+
+class MarkovTransitionFactor(Factor):
+    """A Markov Transition Factor is a Factor whose variables are 'prev_state' and 'current_state'."""
+
+    def __init__(self, table):
+        """
+        Initialize the Markov Transition Factor.
+
+        Args:
+            table: Dictionary where keys are tuples (prev_state, current_state), and values are the corresponding probabilities.
+        """
+        super().__init__(["prev_state", "current_state"], table)
+
+
+class MarkovEmissionFactor(Factor):
+    """A Markov Emission Factor is a Factor whose variables are 'state' and 'observation'."""
+
+    def __init__(self, table):
+        """
+        Initialize the Markov Emission Factor.
+
+        Args:
+            table: Dictionary where keys are tuples (state, observation), and values are the corresponding probabilities.
+        """
+        super().__init__(["state", "observation"], table)
+
+
 class HiddenMarkovModel:
     def __init__(
         self, states, observations, start_probs, transition_probs, emission_probs
@@ -32,7 +71,7 @@ class HiddenMarkovModel:
         # Initialize the stationary distribution as the start probabilities
         symbols_list = [symbols(f"state_{i}") for i in range(len(self.states))]
         # Create a dict that maps states to symbols
-        distro = {state: symbol for state, symbol in zip(self.states, symbols_list)}
+        distro = {(state,): symbol for state, symbol in zip(self.states, symbols_list)}
         # Create a factor with the stationary distribution
         distro_factor = Factor(["prev_state"], distro)
         new_distro_factor = (
@@ -43,7 +82,7 @@ class HiddenMarkovModel:
         # Construct the equations for the stationary distribution
         equations = [Eq(sum(symbols_list), 1)]
         for state in self.states:
-            equation = Eq(distro[state], new_distro_factor.table[state])
+            equation = Eq(distro[(state,)], new_distro_factor.table[(state,)])
             equations.append(equation)
         solution = solve(equations, symbols_list)
         # Construct the factor stationary distribution from the solution
@@ -51,7 +90,7 @@ class HiddenMarkovModel:
             ["state"], {state: solution[symbol] for state, symbol in distro.items()}
         )
 
-    def forward(self, observed_sequence):
+    def filtering(self, observed_sequence):
         """
         Perform the Forward algorithm to compute the probability of the observation sequence.
 
@@ -61,24 +100,41 @@ class HiddenMarkovModel:
         Returns:
             The probability of the observed sequence.
         """
+        forward_message = self.start_probs
         # Initialize forward messages with start probabilities and first observation
-        forward_message = self.start_probs.multiply(
-            self.emission_probs[observed_sequence[0]]
-        )
-
-        for t in range(1, len(observed_sequence)):
-            # Predict: Multiply forward message by transition probabilities and sum out previous state
-            forward_message = self.transition_probs.multiply(forward_message)
-            forward_message = forward_message.sum_out("prev_state")
-
-            # Update with the observation evidence
-            forward_message = forward_message.multiply(
-                self.emission_probs[observed_sequence[t]]
+        for obs in observed_sequence:
+            forward_message = (
+                forward_message.rename_variable("state", "prev_state")
+                .multiply(self.transition_probs)
+                .sum_out("prev_state")
+                .rename_variable("current_state", "state")
+                .multiply(self.emission_probs.restrict("observation", obs))
+                .normalize()
             )
+        return forward_message
 
-        # Sum out the final states to get the probability of the entire sequence
-        sequence_prob = sum(forward_message.table.values())
-        return sequence_prob
+    def predict(self, observed_seq, target_idx):
+        """
+        Predict the probability of the target state at a given time step.
+
+        Args:
+            observed_seq: List of observed symbols.
+            target_idx: The time step to predict the target state.
+
+        Returns:
+            The probability of the target state at the given time step.
+        """
+        forward_message = self.filtering(observed_seq)
+        # Iterate over the part that is not observed
+        for t in range(len(observed_seq), target_idx):
+            forward_message = (
+                forward_message.rename_variable("state", "prev_state")
+                .multiply(self.transition_probs)
+                .sum_out("prev_state")
+                .rename_variable("current_state", "state")
+                .normalize()
+            )
+        return forward_message
 
     def backward(self, observed_sequence):
         """
